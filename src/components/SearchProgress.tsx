@@ -14,7 +14,7 @@ export const SearchProgress: React.FC<SearchProgressProps> = ({ steps }) => {
   return (
     <View style={styles.container}>
       {steps.map((step, index) => (
-        <View key={index} style={styles.stepContainer}>
+        <View key={`${step.text}-${index}`} style={styles.stepContainer}>
           <View style={styles.stepHeader}>
             <View style={styles.iconContainer}>
               {step.isActive ? (

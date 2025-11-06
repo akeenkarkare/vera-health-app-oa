@@ -7,7 +7,6 @@ import { ContentSection } from '../types';
 export class MarkdownParser {
   private buffer: string = '';
   private sections: ContentSection[] = [];
-  private sectionCounter: number = 0;
 
   /**
    * Adds new text chunk to the buffer and parses it incrementally
@@ -110,14 +109,12 @@ export class MarkdownParser {
   reset(): void {
     this.buffer = '';
     this.sections = [];
-    this.sectionCounter = 0;
   }
 
   /**
-   * Force parse remaining buffer (call when stream is complete)
+   * Finalize parsing when stream is complete
    */
   finalize(): ContentSection[] {
-    // Just do a final parse - parse() already handles everything
     return this.parse();
   }
 }

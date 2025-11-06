@@ -42,13 +42,6 @@ export const ChatScreen: React.FC = () => {
   const messageCompletedRef = useRef(false);
   const lastUpdateTimeRef = useRef(0);
 
-  // Don't auto-scroll while streaming - it prevents user from scrolling
-  // useEffect(() => {
-  //   if (sections.length > 0 || searchSteps.length > 0) {
-  //     scrollViewRef.current?.scrollToEnd({ animated: true });
-  //   }
-  // }, [sections, searchSteps]);
-
   const handleSubmit = async () => {
     if (!question.trim() || isStreaming) return;
 
@@ -209,6 +202,13 @@ export const ChatScreen: React.FC = () => {
                 defaultExpanded={true}
                 icon="❓"
               >
+                {isStreaming && sections.length === 0 && searchSteps.length === 0 && (
+                  <View style={styles.thinkingContainer}>
+                    <ActivityIndicator size="small" color="#4299E1" />
+                    <Text style={styles.thinkingText}>Thinking...</Text>
+                  </View>
+                )}
+
                 {searchSteps.length > 0 && (
                   <SearchProgress steps={searchSteps} />
                 )}
@@ -216,13 +216,6 @@ export const ChatScreen: React.FC = () => {
                 {sections.length > 0 && (
                   <View style={styles.answerContainer}>
                     {sections.map(renderSection)}
-                  </View>
-                )}
-
-                {isStreaming && sections.length === 0 && searchSteps.length === 0 && (
-                  <View style={styles.thinkingContainer}>
-                    <ActivityIndicator size="small" color="#4299E1" />
-                    <Text style={styles.thinkingText}>Thinking...</Text>
                   </View>
                 )}
 
