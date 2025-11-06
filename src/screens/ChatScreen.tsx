@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -19,9 +19,18 @@ import { StreamService } from '../services/streamService';
 import { MarkdownParser, getTagTitle } from '../utils/markdownParser';
 import { ContentSection, SearchStep } from '../types';
 
+interface ChatMessage {
+  id: string;
+  question: string;
+  sections: ContentSection[];
+  searchSteps: SearchStep[];
+  error?: string;
+}
+
 export const ChatScreen: React.FC = () => {
   const [question, setQuestion] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [currentQuestion, setCurrentQuestion] = useState('');
   const [sections, setSections] = useState<ContentSection[]>([]);
   const [searchSteps, setSearchSteps] = useState<SearchStep[]>([]);
@@ -30,18 +39,22 @@ export const ChatScreen: React.FC = () => {
   const streamService = useRef(new StreamService());
   const markdownParser = useRef(new MarkdownParser());
   const scrollViewRef = useRef<ScrollView>(null);
+  const messageCompletedRef = useRef(false);
+  const lastUpdateTimeRef = useRef(0);
 
-  useEffect(() => {
-    // Auto-scroll to bottom when new content arrives
-    if (sections.length > 0 || searchSteps.length > 0) {
-      scrollViewRef.current?.scrollToEnd({ animated: true });
-    }
-  }, [sections, searchSteps]);
+  // Don't auto-scroll while streaming - it prevents user from scrolling
+  // useEffect(() => {
+  //   if (sections.length > 0 || searchSteps.length > 0) {
+  //     scrollViewRef.current?.scrollToEnd({ animated: true });
+  //   }
+  // }, [sections, searchSteps]);
 
   const handleSubmit = async () => {
     if (!question.trim() || isStreaming) return;
 
     const trimmedQuestion = question.trim();
+    const messageId = Date.now().toString();
+
     setCurrentQuestion(trimmedQuestion);
     setQuestion('');
     setIsStreaming(true);
@@ -49,14 +62,26 @@ export const ChatScreen: React.FC = () => {
     setSections([]);
     setSearchSteps([]);
     markdownParser.current.reset();
+    messageCompletedRef.current = false;
+    lastUpdateTimeRef.current = 0;
+
+    let latestSearchSteps: SearchStep[] = [];
 
     try {
       await streamService.current.streamQuestion(trimmedQuestion, {
         onChunk: (chunk: string) => {
-          const newSections = markdownParser.current.addChunk(chunk);
-          setSections([...newSections]);
+          markdownParser.current.addChunk(chunk);
+
+          // Throttle: only update if enough time has passed since last update
+          const now = Date.now();
+          if (now - lastUpdateTimeRef.current >= 100) {
+            const newSections = markdownParser.current.getSections();
+            setSections([...newSections]);
+            lastUpdateTimeRef.current = now;
+          }
         },
         onSearchStep: (steps: SearchStep[]) => {
+          latestSearchSteps = steps;
           setSearchSteps([...steps]);
         },
         onError: (err: Error) => {
@@ -64,14 +89,42 @@ export const ChatScreen: React.FC = () => {
           setIsStreaming(false);
         },
         onComplete: () => {
+          // Guard against duplicate onComplete calls
+          if (messageCompletedRef.current) return;
+          messageCompletedRef.current = true;
+
           const finalSections = markdownParser.current.finalize();
           setSections([...finalSections]);
           setIsStreaming(false);
+
+          // Save to messages
+          setMessages(prev => [...prev, {
+            id: messageId,
+            question: trimmedQuestion,
+            sections: finalSections,
+            searchSteps: latestSearchSteps,
+          }]);
+
+          // Clear current question to avoid showing duplicate
+          setCurrentQuestion('');
         },
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred');
+      const errorMsg = err instanceof Error ? err.message : 'An error occurred';
+      setError(errorMsg);
       setIsStreaming(false);
+
+      // Save error to messages (only if not already completed)
+      if (!messageCompletedRef.current) {
+        messageCompletedRef.current = true;
+        setMessages(prev => [...prev, {
+          id: messageId,
+          question: trimmedQuestion,
+          sections: [],
+          searchSteps: latestSearchSteps,
+          error: errorMsg,
+        }]);
+      }
     }
   };
 
@@ -121,27 +174,51 @@ export const ChatScreen: React.FC = () => {
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
         >
+          {/* Previous messages */}
+          {messages.map((msg) => (
+            <View key={msg.id} style={styles.messageContainer}>
+              <CollapsibleSection
+                title={msg.question}
+                defaultExpanded={true}
+                icon="❓"
+              >
+                {msg.searchSteps.length > 0 && (
+                  <SearchProgress steps={msg.searchSteps} />
+                )}
+
+                {msg.sections.length > 0 && (
+                  <View style={styles.answerContainer}>
+                    {msg.sections.map(renderSection)}
+                  </View>
+                )}
+
+                {msg.error && (
+                  <View style={styles.errorContainer}>
+                    <Text style={styles.errorText}>Error: {msg.error}</Text>
+                  </View>
+                )}
+              </CollapsibleSection>
+            </View>
+          ))}
+
+          {/* Current streaming message */}
           {currentQuestion && (
             <View style={styles.messageContainer}>
-              {/* User Question */}
               <CollapsibleSection
                 title={currentQuestion}
                 defaultExpanded={true}
                 icon="❓"
               >
-                {/* Search Progress */}
                 {searchSteps.length > 0 && (
                   <SearchProgress steps={searchSteps} />
                 )}
 
-                {/* Answer Sections */}
                 {sections.length > 0 && (
                   <View style={styles.answerContainer}>
                     {sections.map(renderSection)}
                   </View>
                 )}
 
-                {/* Streaming Indicator */}
                 {isStreaming && sections.length === 0 && searchSteps.length === 0 && (
                   <View style={styles.thinkingContainer}>
                     <ActivityIndicator size="small" color="#4299E1" />
@@ -149,7 +226,6 @@ export const ChatScreen: React.FC = () => {
                   </View>
                 )}
 
-                {/* Error Message */}
                 {error && (
                   <View style={styles.errorContainer}>
                     <Text style={styles.errorText}>Error: {error}</Text>
@@ -159,7 +235,7 @@ export const ChatScreen: React.FC = () => {
             </View>
           )}
 
-          {!currentQuestion && (
+          {!currentQuestion && messages.length === 0 && (
             <View style={styles.emptyState}>
               <Text style={styles.emptyStateTitle}>Ask a clinical question</Text>
               <Text style={styles.emptyStateSubtitle}>

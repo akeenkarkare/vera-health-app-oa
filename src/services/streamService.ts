@@ -13,75 +13,68 @@ export class StreamService {
   private abortController: AbortController | null = null;
 
   async streamQuestion(question: string, callbacks: StreamCallbacks): Promise<void> {
-    this.abortController = new AbortController();
     const encodedPrompt = encodeURIComponent(question);
     const url = `${API_BASE_URL}?prompt=${encodedPrompt}`;
 
-    try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Accept': 'text/event-stream',
-          'Content-Type': 'text/event-stream',
-        },
-        signal: this.abortController.signal,
-        // @ts-ignore - React Native specific
-        reactNative: { textStreaming: true },
-      });
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
 
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+      xhr.open('GET', url);
+      xhr.setRequestHeader('Accept', 'text/event-stream');
 
-      // Check if streaming is supported
-      if (response.body && typeof response.body.getReader === 'function') {
-        // Browser/modern environment with streaming support
-        await this.streamWithReader(response, callbacks);
-      } else {
-        // Fallback for environments without streaming support
-        const text = await response.text();
-        this.processStreamData(text, callbacks);
-        callbacks.onComplete();
-      }
-    } catch (error) {
-      if (error instanceof Error && error.name === 'AbortError') {
-        // Stream was cancelled, this is expected
-        return;
-      }
-      callbacks.onError(error instanceof Error ? error : new Error('Unknown error'));
-    }
-  }
+      let buffer = '';
+      let lastProcessedIndex = 0;
 
-  private async streamWithReader(response: Response, callbacks: StreamCallbacks): Promise<void> {
-    const reader = response.body!.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
+      xhr.onprogress = () => {
+        // Get only the new data since last update
+        const newData = xhr.responseText.substring(lastProcessedIndex);
+        lastProcessedIndex = xhr.responseText.length;
 
-    while (true) {
-      const { done, value } = await reader.read();
+        buffer += newData;
+        const lines = buffer.split('\n');
 
-      if (done) {
-        callbacks.onComplete();
-        break;
-      }
+        // Keep the last incomplete line in buffer
+        buffer = lines.pop() || '';
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
+        for (const line of lines) {
+          this.processLine(line, callbacks);
+        }
+      };
 
-      // Keep the last incomplete line in the buffer
-      buffer = lines.pop() || '';
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          // Process any remaining buffer
+          if (buffer) {
+            const lines = buffer.split('\n');
+            for (const line of lines) {
+              this.processLine(line, callbacks);
+            }
+          }
+          callbacks.onComplete();
+          resolve();
+        } else {
+          const error = new Error(`HTTP error! status: ${xhr.status}`);
+          callbacks.onError(error);
+          reject(error);
+        }
+      };
 
-      for (const line of lines) {
-        this.processLine(line, callbacks);
-      }
-    }
-  }
+      xhr.onerror = () => {
+        const error = new Error('Network error');
+        callbacks.onError(error);
+        reject(error);
+      };
 
-  private processStreamData(text: string, callbacks: StreamCallbacks): void {
-    const lines = text.split('\n');
-    for (const line of lines) {
-      this.processLine(line, callbacks);
-    }
+      xhr.onabort = () => {
+        resolve(); // Cancelled is expected
+      };
+
+      this.abortController = {
+        abort: () => xhr.abort(),
+      } as AbortController;
+
+      xhr.send();
+    });
   }
 
   private processLine(line: string, callbacks: StreamCallbacks): void {
